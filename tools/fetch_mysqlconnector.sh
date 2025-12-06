@@ -12,17 +12,32 @@ mkdir -p "$PKG_DIR"
 
 if [ ! -f "$PKG_PATH" ]; then
   echo "Downloading $PKG_ID $PKG_VERSION from nuget.org..."
-  python - <<'PY'
+  if ! python - <<'PY'
+import os
 import sys
+import urllib.error
 import urllib.request
+
 url = sys.argv[1]
 path = sys.argv[2]
-with urllib.request.urlopen(url) as resp:
-    data = resp.read()
-open(path, 'wb').write(data)
-print('Downloaded {} bytes to {}'.format(len(data), path))
+
+try:
+    with urllib.request.urlopen(url) as resp:
+        data = resp.read()
+    if len(data) < 1024:
+        raise RuntimeError("Downloaded content is too small ({} bytes)".format(len(data)))
+    with open(path, 'wb') as fh:
+        fh.write(data)
+    print('Downloaded {} bytes to {}'.format(len(data), path))
+except Exception as exc:
+    if os.path.exists(path):
+        os.remove(path)
+    raise SystemExit('Download failed: {}'.format(exc))
 PY
- "$URL" "$PKG_PATH"
+   "$URL" "$PKG_PATH"; then
+    echo "ERROR: Unable to download $PKG_ID $PKG_VERSION. Please download it manually into $PKG_DIR and re-run this script."
+    exit 1
+  fi
 else
   echo "Using existing $PKG_PATH"
 fi
@@ -34,8 +49,13 @@ python - <<'PY'
 import os
 import sys
 import zipfile
+
 pkg_path = sys.argv[1]
 dest = sys.argv[2]
+
+if not os.path.isfile(pkg_path):
+    raise SystemExit('Package not found: {}'.format(pkg_path))
+
 with zipfile.ZipFile(pkg_path, 'r') as zf:
     zf.extractall(dest)
 print('Extracted contents to {}'.format(dest))
