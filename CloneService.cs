@@ -29,7 +29,8 @@ public class DatabaseConnectionInfo
             Port = (uint)(Port > 0 ? Port : 3306),
             UserID = UserName,
             Password = Password,
-            Database = Database
+            Database = Database,
+            AllowUserVariables = true
         };
 
         return builder.ConnectionString;

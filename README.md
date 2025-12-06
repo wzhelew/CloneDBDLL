@@ -52,3 +52,4 @@ CloneService.CloneDatabase(
 ```
 
 > Забележка: За да запазите максимална съвместимост с MySQL/MariaDB 5.x, библиотеката използва стандартни SQL команди (`SHOW CREATE TABLE/VIEW/TRIGGER/FUNCTION/PROCEDURE`) без диалектни разширения.
+> Допълнително: връзките се създават с `Allow User Variables=true`, за да се избегнат грешки като `MySqlException: Parameter '@aaaa' must be defined`; не е нужно ръчно да добавяте тази настройка в connection string.
