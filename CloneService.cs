@@ -8,11 +8,11 @@ namespace CloneDBManager
 {
     public class DatabaseConnectionInfo
     {
-        public string Host { get; set; }
-        public int Port { get; set; }
-        public string UserName { get; set; }
-        public string Password { get; set; }
-        public string Database { get; set; }
+        public string Host { get; set; } = string.Empty;
+        public int Port { get; set; } = 3306;
+        public string UserName { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
+        public string Database { get; set; } = string.Empty;
 
         public string BuildConnectionString()
         {
@@ -55,9 +55,14 @@ namespace CloneDBManager
         public static void CloneDatabase(
             DatabaseConnectionInfo source,
             DatabaseConnectionInfo destination,
-            CloneOptions options,
-            Action<string> log)
+            CloneOptions? options = null,
+            Action<string>? log = null)
         {
+            if (source == null) throw new ArgumentNullException(nameof(source));
+            if (destination == null) throw new ArgumentNullException(nameof(destination));
+
+            options ??= new CloneOptions();
+
             var sourceConnectionString = source.BuildConnectionString();
             var destinationConnectionString = destination.BuildConnectionString();
 
