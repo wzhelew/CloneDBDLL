@@ -4,7 +4,9 @@
 
 ## Създаване на DLL
 1. Уверете се, че имате инсталиран .NET Framework 4.6.1 и инструменти за MSBuild (на Windows) плюс достъп до MySQL сървър поне версия 5.x (MySQL или MariaDB).
-2. Възстановете NuGet пакетите (генерира `packages/` и предотвратява грешката за липсващи зависимост/targets):
+2. Възстановете NuGet пакетите (генерира `packages/` и предотвратява грешката за липсващи зависимост/targets). В `NuGet.config` е
+зададен `repositoryPath=packages`, така че ако MSBuild/NuGet не открие автоматично папката, добавете `-PackagesDirectory packages`
+или стартирайте командите от директорията на проекта:
    ```bash
    nuget restore CloneDBDLL.csproj
    ```
