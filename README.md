@@ -9,7 +9,8 @@
    nuget restore CloneDBDLL.csproj
    ```
    - алтернатива: `msbuild CloneDBDLL.csproj /t:Restore`
-   - изисква се NuGet пакет `MySqlConnector` v2.3.7 (ще създаде `packages\MySqlConnector.2.3.7\...`)
+   - изисква се NuGet пакет `MySqlConnector` v2.3.7 (ще създаде `packages\MySqlConnector.2.3.7\...` с `build\net461` цели)
+   - ако сте офлайн, свалете ръчно `MySqlConnector.2.3.7.nupkg` в `packages/` и стартирайте `tools/fetch_mysqlconnector.sh`, който ще го разархивира в `packages/MySqlConnector.2.3.7/`
 3. Билднете в Release:
    ```bash
    msbuild CloneDBDLL.csproj /p:Configuration=Release
@@ -18,8 +19,6 @@
 
 ## Употреба
 ```csharp
-using CloneDBManager;
-
 var source = new DatabaseConnectionInfo
 {
     Host = "source-host",
