@@ -9,7 +9,7 @@
    nuget restore CloneDBDLL.csproj
    ```
    - алтернатива: `msbuild CloneDBDLL.csproj /t:Restore`
-   - изисква се NuGet пакет `MySqlConnector` v2.3.7 (ще създаде `packages\MySqlConnector.2.3.7\...`)
+   - изисква се NuGet пакет `MySqlConnector` v2.3.7 (ще създаде `packages\MySqlConnector.2.3.7\...` с `build\net461` цели)
 3. Билднете в Release:
    ```bash
    msbuild CloneDBDLL.csproj /p:Configuration=Release
