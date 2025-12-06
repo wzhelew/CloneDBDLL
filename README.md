@@ -3,16 +3,17 @@
 Библиотека (.NET Framework 4.5 класическа DLL) за клониране на MySQL/MariaDB база данни (минимум версия 5.x). Тя използва `CloneService.CloneDatabase` за копиране на структури, данни, изгледи, тригери и процедури между източник и дестинация.
 
 ## Създаване на DLL
-1. Уверете се, че имате инсталиран .NET Framework 4.5 SDK/целеви инструменти (MSBuild) и достъп до MySQL сървър поне версия 5.x (MySQL или MariaDB).
-2. Изпълнете възстановяване на пакетите (генерира `obj/project.assets.json`):
+1. Уверете се, че имате инсталиран .NET Framework 4.5 и инструменти за MSBuild (на Windows) плюс достъп до MySQL сървър поне версия 5.x (MySQL или MariaDB).
+2. Възстановете NuGet пакетите (генерира `packages/` и предотвратява грешката NETSDK1004 за липсващ `project.assets.json`):
    ```bash
-   dotnet restore
+   nuget restore CloneDBDLL.csproj
    ```
+   - алтернатива: `msbuild CloneDBDLL.csproj /t:Restore`
 3. Билднете в Release:
    ```bash
-   dotnet build -c Release
+   msbuild CloneDBDLL.csproj /p:Configuration=Release
    ```
-4. Готовата библиотека е в `bin/Release/net45/CloneDBDLL.dll`.
+4. Готовата библиотека е в `bin/Release/CloneDBDLL.dll`.
 
 ## Употреба
 ```csharp
