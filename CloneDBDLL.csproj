@@ -49,6 +49,7 @@
     <PropertyGroup>
       <ErrorText>NuGet packages are missing. Please restore via 'nuget restore' or 'msbuild /t:Restore'. Missing file: {0}</ErrorText>
     </PropertyGroup>
-    <Error Condition="!Exists('packages\MySql.Data.6.10.9\build\MySql.Data.targets')" Text="$(ErrorText)" />
+    <Error Condition="!Exists('packages\MySql.Data.6.10.9\build\MySql.Data.targets')"
+           Text="$([System.String]::Format('$(ErrorText)', 'packages\MySql.Data.6.10.9\build\MySql.Data.targets'))" />
   </Target>
 </Project>
