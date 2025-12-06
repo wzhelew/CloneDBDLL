@@ -8,11 +8,20 @@ namespace CloneDBManager
 {
     public class DatabaseConnectionInfo
     {
-        public string Host { get; set; } = string.Empty;
-        public int Port { get; set; } = 3306;
-        public string UserName { get; set; } = string.Empty;
-        public string Password { get; set; } = string.Empty;
-        public string Database { get; set; } = string.Empty;
+        public DatabaseConnectionInfo()
+        {
+            Host = string.Empty;
+            Port = 3306;
+            UserName = string.Empty;
+            Password = string.Empty;
+            Database = string.Empty;
+        }
+
+        public string Host { get; set; }
+        public int Port { get; set; }
+        public string UserName { get; set; }
+        public string Password { get; set; }
+        public string Database { get; set; }
 
         public string BuildConnectionString()
         {
@@ -45,9 +54,16 @@ namespace CloneDBManager
 
     public class CloneOptions
     {
-        public bool CopyTriggers { get; set; } = true;
-        public bool CopyRoutines { get; set; } = true;
-        public bool CopyViews { get; set; } = true;
+        public CloneOptions()
+        {
+            CopyTriggers = true;
+            CopyRoutines = true;
+            CopyViews = true;
+        }
+
+        public bool CopyTriggers { get; set; }
+        public bool CopyRoutines { get; set; }
+        public bool CopyViews { get; set; }
     }
 
     public static class CloneService
@@ -55,13 +71,13 @@ namespace CloneDBManager
         public static void CloneDatabase(
             DatabaseConnectionInfo source,
             DatabaseConnectionInfo destination,
-            CloneOptions? options = null,
-            Action<string>? log = null)
+            CloneOptions options = null,
+            Action<string> log = null)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             if (destination == null) throw new ArgumentNullException(nameof(destination));
 
-            options ??= new CloneOptions();
+            options = options ?? new CloneOptions();
 
             var sourceConnectionString = source.BuildConnectionString();
             var destinationConnectionString = destination.BuildConnectionString();
@@ -86,35 +102,53 @@ namespace CloneDBManager
                             continue;
                         }
 
-                        log?.Invoke(string.Format("Cloning structure for table '{0}'...", table.Name));
+                        if (log != null)
+                        {
+                            log(string.Format("Cloning structure for table '{0}'...", table.Name));
+                        }
                         CloneTable(sourceConnection, destinationConnection, table.Name);
 
                         if (table.CopyData)
                         {
-                            log?.Invoke(string.Format("Copying data for '{0}'...", table.Name));
+                            if (log != null)
+                            {
+                                log(string.Format("Copying data for '{0}'...", table.Name));
+                            }
                             CopyData(sourceConnection, destinationConnection, table.Name);
                         }
                     }
 
                     if (options != null && options.CopyViews)
                     {
-                        log?.Invoke("Cloning views...");
+                        if (log != null)
+                        {
+                            log("Cloning views...");
+                        }
                         CloneViews(sourceConnection, destinationConnection);
                     }
 
                     if (options != null && options.CopyTriggers)
                     {
-                        log?.Invoke("Cloning triggers...");
+                        if (log != null)
+                        {
+                            log("Cloning triggers...");
+                        }
                         CloneTriggers(sourceConnection, destinationConnection);
                     }
 
                     if (options != null && options.CopyRoutines)
                     {
-                        log?.Invoke("Cloning stored routines (functions/procedures)...");
+                        if (log != null)
+                        {
+                            log("Cloning stored routines (functions/procedures)...");
+                        }
                         CloneRoutines(sourceConnection, destinationConnection);
                     }
 
-                    log?.Invoke("Cloning completed successfully.");
+                    if (log != null)
+                    {
+                        log("Cloning completed successfully.");
+                    }
                 }
                 finally
                 {
