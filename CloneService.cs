@@ -58,7 +58,7 @@ namespace CloneDBManager
             bool copyTriggers,
             bool copyRoutines,
             bool copyViews,
-            Action<string>? log,
+            Action<string> log = null,
             DataCopyMethod copyMethod = DataCopyMethod.BulkCopy,
             bool createDestinationDatabaseIfMissing = false,
             CancellationToken cancellationToken = default)
@@ -208,7 +208,7 @@ namespace CloneDBManager
             MySqlConnection destination,
             string tableName,
             DataCopyMethod method,
-            Action<string>? log,
+            Action<string> log,
             CancellationToken cancellationToken)
         {
             switch (method)
@@ -231,7 +231,7 @@ namespace CloneDBManager
             MySqlConnection source,
             MySqlConnection destination,
             string tableName,
-            Action<string>? log,
+            Action<string> log,
             CancellationToken cancellationToken)
         {
             using (var selectCmd = new MySqlCommand($"SELECT * FROM `{tableName}`;", source))
@@ -277,7 +277,7 @@ namespace CloneDBManager
             DbDataReader reader,
             MySqlConnection destination,
             string tableName,
-            Action<string>? log,
+            Action<string> log,
             CancellationToken cancellationToken)
         {
             await PrepareConnectionForBulkCopyAsync(destination, log, cancellationToken);
@@ -361,7 +361,7 @@ namespace CloneDBManager
             parameters.Clear();
         }
 
-        private static async Task PrepareConnectionForBulkCopyAsync(MySqlConnection destination, Action<string>? log, CancellationToken cancellationToken)
+        private static async Task PrepareConnectionForBulkCopyAsync(MySqlConnection destination, Action<string> log, CancellationToken cancellationToken)
         {
             var connectionCharacterSet = await GetConnectionCharacterSetAsync(destination, cancellationToken);
             if (string.IsNullOrWhiteSpace(connectionCharacterSet))
@@ -431,7 +431,7 @@ namespace CloneDBManager
                 while (pending.Count > 0)
                 {
                     var createdThisPass = false;
-                    Exception? lastError = null;
+                    Exception lastError = null;
 
                     foreach (var view in pending.ToList())
                     {
@@ -538,7 +538,7 @@ LIMIT 1;";
             }
         }
 
-        private static async Task<(string? CharacterSet, string? Collation)> GetDatabaseCharsetAndCollationAsync(
+        private static async Task<(string CharacterSet, string Collation)> GetDatabaseCharsetAndCollationAsync(
             MySqlConnection connection,
             string databaseName,
             CancellationToken cancellationToken)
@@ -732,7 +732,7 @@ LIMIT 1;";
             return builder.ToString();
         }
 
-        private static async Task<string?> GetConnectionCharacterSetAsync(MySqlConnection connection, CancellationToken cancellationToken)
+        private static async Task<string> GetConnectionCharacterSetAsync(MySqlConnection connection, CancellationToken cancellationToken)
         {
             using (var cmd = new MySqlCommand("SELECT @@character_set_connection;", connection))
             {
@@ -741,7 +741,7 @@ LIMIT 1;";
             }
         }
 
-        private static async Task<string?> GetSupportedCharacterSetAsync(MySqlConnection connection, string requestedCharacterSet, CancellationToken cancellationToken)
+        private static async Task<string> GetSupportedCharacterSetAsync(MySqlConnection connection, string requestedCharacterSet, CancellationToken cancellationToken)
         {
             const string sql = "SELECT COUNT(*) FROM information_schema.CHARACTER_SETS WHERE CHARACTER_SET_NAME = @charset LIMIT 1;";
 
