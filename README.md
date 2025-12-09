@@ -66,5 +66,11 @@ await CloneService.CloneDatabaseAsync(
     createDestinationDatabaseIfMissing: true); // по желание автоматично създава дестинационната база
 ```
 
+`copyMethod` приема:
+- `BulkCopy` (по подразбиране) – опитва се да прехвърли данните чрез `MySqlBulkCopy` и при неуспех автоматично пада към `BulkInsert`.
+- `BulkInsert` – директно изпълнява пакетни `INSERT` команди.
+
+
+
 > Забележка: За да запазите максимална съвместимост с MySQL/MariaDB 5.x, библиотеката използва стандартни SQL команди (`SHOW CREATE TABLE/VIEW/TRIGGER/FUNCTION/PROCEDURE`) без диалектни разширения.
 > Допълнително: връзките се създават с `Allow User Variables=true`, за да се избегнат грешки като `MySqlException: Parameter '@aaaa' must be defined`; не е нужно ръчно да добавяте тази настройка в connection string.
