@@ -10,7 +10,17 @@ using MySqlConnector;
 
 namespace CloneDBManager
 {
-    public record TableCloneOption(string Name, bool CopyData);
+    public sealed class TableCloneOption
+    {
+        public string Name { get; }
+        public bool CopyData { get; }
+
+        public TableCloneOption(string name, bool copyData)
+        {
+            Name = name ?? throw new ArgumentNullException(nameof(name));
+            CopyData = copyData;
+        }
+    }
 
     public enum DataCopyMethod
     {
