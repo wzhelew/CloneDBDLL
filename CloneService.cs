@@ -147,7 +147,7 @@ namespace CloneDBManager
                 }
 
                 var createStatement = GetStringValue(reader, 1);
-                await reader.CloseAsync();
+                reader.Close();
 
                 using (var dropTableCmd = new MySqlCommand($"DROP TABLE IF EXISTS `{tableName}`;", destination))
                 {
@@ -287,7 +287,7 @@ namespace CloneDBManager
                 DestinationTableName = WrapName(tableName)
             };
 
-            await bulkCopy.WriteToServerAsync(reader, cancellationToken);
+            bulkCopy.WriteToServer(reader);
         }
 
         private static async Task CopyDataWithBulkInsertAsync(DbDataReader reader, MySqlConnection destination, string tableName, CancellationToken cancellationToken)
@@ -399,7 +399,7 @@ namespace CloneDBManager
                 {
                     views.Add(GetStringValue(reader, 0));
                 }
-                await reader.CloseAsync();
+                reader.Close();
 
                 var definitions = new List<(string Name, string CreateSql)>();
                 foreach (var viewName in views)
@@ -413,7 +413,7 @@ namespace CloneDBManager
                         }
 
                         var createStatement = GetStringValue(createReader, 1);
-                        await createReader.CloseAsync();
+                        createReader.Close();
 
                         definitions.Add((viewName, createStatement));
                     }
@@ -470,15 +470,10 @@ namespace CloneDBManager
                 {
                     triggers.Add(GetStringValue(reader, 0));
                 }
-                await reader.CloseAsync();
+                reader.Close();
 
                 var sourceSchema = await GetCurrentDatabaseAsync(source, cancellationToken);
                 var destinationSchema = await GetCurrentDatabaseAsync(destination, cancellationToken);
-
-                const string triggerDetailsSql = @"SELECT ACTION_TIMING, EVENT_MANIPULATION, EVENT_OBJECT_TABLE, ACTION_STATEMENT
-FROM information_schema.triggers
-WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = @triggerName
-LIMIT 1;";
 
                 foreach (var trigger in triggers)
                 {
@@ -499,11 +494,11 @@ LIMIT 1;";
                         var eventManipulation = GetStringValue(createReader, 1);
                         var eventTable = GetStringValue(createReader, 2);
                         var body = GetStringValue(createReader, 3).Trim().TrimEnd(';');
-                        await createReader.CloseAsync();
+                        createReader.Close();
 
                         if (!string.IsNullOrEmpty(sourceSchema) && !string.IsNullOrEmpty(destinationSchema) && !sourceSchema.Equals(destinationSchema, StringComparison.OrdinalIgnoreCase))
                         {
-                            eventTable = eventTable.Replace(sourceSchema, destinationSchema, StringComparison.OrdinalIgnoreCase);
+                            eventTable = ReplaceIgnoreCase(eventTable, sourceSchema, destinationSchema);
                         }
 
                         var createStatement = $"CREATE TRIGGER {WrapName(trigger)} {actionTiming} {eventManipulation} ON {WrapName(eventTable)} FOR EACH ROW {body};";
@@ -577,7 +572,7 @@ LIMIT 1;";
                 {
                     routines.Add((GetStringValue(reader, 0), GetStringValue(reader, 1)));
                 }
-                await reader.CloseAsync();
+                reader.Close();
 
                 foreach (var routine in routines)
                 {
@@ -594,7 +589,7 @@ LIMIT 1;";
                         }
 
                         var createStatement = GetStringValue(createReader, 2);
-                        await createReader.CloseAsync();
+                        createReader.Close();
 
                         var dropSql = routine.Type.Equals("FUNCTION", StringComparison.OrdinalIgnoreCase)
                             ? $"DROP FUNCTION IF EXISTS `{routine.Name}`;"
@@ -716,6 +711,34 @@ LIMIT 1;";
             }
 
             return Convert.ToString(value) ?? string.Empty;
+        }
+
+        private static string ReplaceIgnoreCase(string input, string search, string replacement)
+        {
+            if (string.IsNullOrEmpty(input) || string.IsNullOrEmpty(search))
+            {
+                return input;
+            }
+
+            var comparison = StringComparison.OrdinalIgnoreCase;
+            var startIndex = 0;
+            var result = new StringBuilder();
+
+            while (true)
+            {
+                var matchIndex = input.IndexOf(search, startIndex, comparison);
+                if (matchIndex < 0)
+                {
+                    result.Append(input, startIndex, input.Length - startIndex);
+                    break;
+                }
+
+                result.Append(input, startIndex, matchIndex - startIndex);
+                result.Append(replacement);
+                startIndex = matchIndex + search.Length;
+            }
+
+            return result.ToString();
         }
 
         private static string WrapName(string name) => $"`{name}`";
