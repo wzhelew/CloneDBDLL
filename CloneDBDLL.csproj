@@ -33,12 +33,16 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="MySqlConnector" Condition="Exists('packages\MySqlConnector.2.3.7\lib\net462\MySqlConnector.dll')">
-      <HintPath>packages\MySqlConnector.2.3.7\lib\net462\MySqlConnector.dll</HintPath>
+    <Reference Include="MySqlConnector" Condition="Exists('packages\MySqlConnector.2.3.7\lib\net48\MySqlConnector.dll')">
+      <HintPath>packages\MySqlConnector.2.3.7\lib\net48\MySqlConnector.dll</HintPath>
       <Private>True</Private>
     </Reference>
-    <Reference Include="MySqlConnector" Condition="!Exists('packages\MySqlConnector.2.3.7\lib\net462\MySqlConnector.dll')">
-      <HintPath>packages\MySqlConnector.2.3.7\lib\net461\MySqlConnector.dll</HintPath>
+    <Reference Include="MySqlConnector" Condition="!Exists('packages\MySqlConnector.2.3.7\lib\net48\MySqlConnector.dll') AND Exists('packages\MySqlConnector.2.3.7\lib\net471\MySqlConnector.dll')">
+      <HintPath>packages\MySqlConnector.2.3.7\lib\net471\MySqlConnector.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="MySqlConnector" Condition="!Exists('packages\MySqlConnector.2.3.7\lib\net48\MySqlConnector.dll') AND !Exists('packages\MySqlConnector.2.3.7\lib\net471\MySqlConnector.dll')">
+      <HintPath>packages\MySqlConnector.2.3.7\lib\net462\MySqlConnector.dll</HintPath>
       <Private>True</Private>
     </Reference>
     <Reference Include="System" />
@@ -50,34 +54,10 @@
     <Compile Include="CloneService.cs" />
   </ItemGroup>
   <PropertyGroup>
-    <MySqlConnectorPackageRoot Condition="'$(MySqlConnectorPackageRoot)' == '' AND '$(NUGET_PACKAGES)' != ''">$(NUGET_PACKAGES)</MySqlConnectorPackageRoot>
+    <MySqlConnectorPackageRoot Condition="'$(MySqlConnectorPackageRoot)' == '' AND '$(NUGET_PACKAGES)' != ''">$(NUGET_PACKAGES)\</MySqlConnectorPackageRoot>
     <MySqlConnectorPackageRoot Condition="'$(MySqlConnectorPackageRoot)' == ''">$(UserProfile)\.nuget\packages\</MySqlConnectorPackageRoot>
     <MySqlConnectorPackageRoot Condition="'$(MySqlConnectorPackageRoot)' == ''">$(NuGetPackageRoot)</MySqlConnectorPackageRoot>
   </PropertyGroup>
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-  <Import Project="packages\MySqlConnector.2.3.7\build\net462\MySqlConnector.targets"
-          Condition="Exists('packages\MySqlConnector.2.3.7\build\net462\MySqlConnector.targets')" />
-  <Import Project="packages\MySqlConnector.2.3.7\build\net461\MySqlConnector.targets"
-          Condition="Exists('packages\MySqlConnector.2.3.7\build\net461\MySqlConnector.targets')" />
-  <Import Project="packages\MySqlConnector.2.3.7\build\MySqlConnector.targets"
-          Condition="Exists('packages\MySqlConnector.2.3.7\build\MySqlConnector.targets')" />
-  <Import Project="$(MySqlConnectorPackageRoot)mysqlconnector\2.3.7\build\net462\MySqlConnector.targets"
-          Condition="Exists('$(MySqlConnectorPackageRoot)mysqlconnector\2.3.7\build\net462\MySqlConnector.targets')" />
-  <Import Project="$(MySqlConnectorPackageRoot)mysqlconnector\2.3.7\build\net461\MySqlConnector.targets"
-          Condition="Exists('$(MySqlConnectorPackageRoot)mysqlconnector\2.3.7\build\net461\MySqlConnector.targets')" />
-  <Import Project="$(MySqlConnectorPackageRoot)mysqlconnector\2.3.7\build\MySqlConnector.targets"
-          Condition="Exists('$(MySqlConnectorPackageRoot)mysqlconnector\2.3.7\build\MySqlConnector.targets')" />
-  <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
-    <PropertyGroup>
-      <ErrorText>NuGet packages are missing. Please restore via 'nuget restore' or 'msbuild /t:Restore'. Missing file: {0}</ErrorText>
-    </PropertyGroup>
-    <Error Condition="!Exists('packages\MySqlConnector.2.3.7\build\net462\MySqlConnector.targets')
-                     AND !Exists('packages\MySqlConnector.2.3.7\build\net461\MySqlConnector.targets')
-                     AND !Exists('packages\MySqlConnector.2.3.7\build\MySqlConnector.targets')
-                     AND !Exists('$(MySqlConnectorPackageRoot)mysqlconnector\2.3.7\build\net462\MySqlConnector.targets')
-                     AND !Exists('$(MySqlConnectorPackageRoot)mysqlconnector\2.3.7\build\net461\MySqlConnector.targets')
-                     AND !Exists('$(MySqlConnectorPackageRoot)mysqlconnector\2.3.7\build\MySqlConnector.targets')"
-           Text="$([System.String]::Format('$(ErrorText)', 'packages\MySqlConnector.2.3.7\build\net462\MySqlConnector.targets or packages\MySqlConnector.2.3.7\build\net461\MySqlConnector.targets or $(MySqlConnectorPackageRoot)mysqlconnector\2.3.7\build\net462\MySqlConnector.targets'))" />
-  </Target>
 </Project>
