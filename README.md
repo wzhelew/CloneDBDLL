@@ -66,5 +66,38 @@ await CloneService.CloneDatabaseAsync(
     createDestinationDatabaseIfMissing: true); // по желание автоматично създава дестинационната база
 ```
 
+`copyMethod` приема:
+- `BulkCopy` (по подразбиране) – опитва се да прехвърли данните чрез `MySqlBulkCopy` и при неуспех автоматично пада към `BulkInsert`.
+- `BulkInsert` – директно изпълнява пакетни `INSERT` команди.
+
+### Пример: копиране на цялата база (структура, данни, изгледи, процедури, тригери)
+```csharp
+var sourceConnectionString = "Server=source-host;Port=3306;User Id=user;Password=password;Database=source_db";
+var destinationConnectionString = "Server=destination-host;Port=3306;User Id=user;Password=password;Database=destination_db";
+
+// Зареждаме всички таблици от източника и ги маркираме за копиране на данните им
+var tableNames = await CloneService.GetTablesAsync(sourceConnectionString);
+var tablesToClone = tableNames
+    .Select(name => new TableCloneOption(name, copyData: true))
+    .ToArray();
+
+await CloneService.CloneDatabaseAsync(
+    sourceConnectionString,
+    destinationConnectionString,
+    tablesToClone,
+    copyTriggers: true,
+    copyRoutines: true,
+    copyViews: true,
+    log: Console.WriteLine,
+    copyMethod: DataCopyMethod.BulkCopy,
+    createDestinationDatabaseIfMissing: true); // по желание автоматично създава дестинационната база
+```
+
+`copyMethod` приема:
+- `BulkCopy` (по подразбиране) – опитва се да прехвърли данните чрез `MySqlBulkCopy` и при неуспех автоматично пада към `BulkInsert`.
+- `BulkInsert` – директно изпълнява пакетни `INSERT` команди.
+
+
+
 > Забележка: За да запазите максимална съвместимост с MySQL/MariaDB 5.x, библиотеката използва стандартни SQL команди (`SHOW CREATE TABLE/VIEW/TRIGGER/FUNCTION/PROCEDURE`) без диалектни разширения.
 > Допълнително: връзките се създават с `Allow User Variables=true`, за да се избегнат грешки като `MySqlException: Parameter '@aaaa' must be defined`; не е нужно ръчно да добавяте тази настройка в connection string.
