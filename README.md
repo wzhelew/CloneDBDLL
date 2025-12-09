@@ -4,15 +4,13 @@
 
 ## Създаване на DLL
 1. Уверете се, че имате инсталиран .NET Framework 4.8 и инструменти за MSBuild (на Windows) плюс достъп до MySQL сървър поне версия 5.x (MySQL или MariaDB).
-2. Възстановете NuGet пакетите (генерира `packages/` и предотвратява грешката за липсващи зависимост/targets). В `NuGet.config` е
-зададен `repositoryPath=packages`, така че ако MSBuild/NuGet не открие автоматично папката, добавете `-PackagesDirectory packages`
-или стартирайте командите от директорията на проекта:
+2. Възстановете NuGet пакетите (генерира `packages/` и предотвратява грешката за липсващи зависимост/targets). В `NuGet.config` е зададен `repositoryPath=packages`, така че ако MSBuild/NuGet не открие автоматично папката, добавете `-PackagesDirectory packages` или стартирайте командите от директорията на проекта:
    ```bash
    nuget restore CloneDBDLL.csproj
    ```
    - алтернатива: `msbuild CloneDBDLL.csproj /t:Restore`
-   - изисква се NuGet пакет `MySqlConnector` v2.3.7 (ще създаде `packages\MySqlConnector.2.3.7\...` с `build\net462` цели; при липса на net462 части, проектът автоматично пада към `build\net461`); проектът ще пробва и глобалния NuGet cache `$(USERPROFILE)\.nuget\packages\mysqlconnector\2.3.7\...` ако локалната папка липсва
-   - ако сте офлайн, свалете ръчно пълния `MySqlConnector.2.3.7.nupkg` в `packages/` и стартирайте `tools/fetch_mysqlconnector.sh`, който ще го разархивира в `packages/MySqlConnector.2.3.7/`; при неуспешно сваляне скриптът връща грешка и не оставя непълен nupkg; уверете се, че `build/net462` и `lib/net462` също са налични или има пад към net461
+   - изисква се NuGet пакет `MySqlConnector` v2.3.7 (ще постави DLL в `packages\MySqlConnector.2.3.7\lib\net48`; налични са и резервни варианти `lib\net471`/`lib\net462`)
+   - ако сте офлайн, свалете ръчно пълния `MySqlConnector.2.3.7.nupkg` в `packages/` и стартирайте `tools/fetch_mysqlconnector.sh`, който ще го разархивира в `packages/MySqlConnector.2.3.7/`; при неуспешно сваляне скриптът връща грешка и не оставя непълен nupkg; уверете се, че `lib/net48` (или поне `lib/net471`/`lib/net462`) са налични
 3. Билднете в Release:
    ```bash
    msbuild CloneDBDLL.csproj /p:Configuration=Release
