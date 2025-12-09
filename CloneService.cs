@@ -242,8 +242,8 @@ public static class CloneService
 
             try
             {
-                await CopyDataWithBulkCopyAsync(reader, destination, tableName, log, cancellationToken);
-                return true;
+                var copied = await CopyDataWithBulkCopyAsync(reader, destination, tableName, log, cancellationToken);
+                return copied;
             }
             catch (Exception ex) when (ex is MySqlException || ex is InvalidOperationException)
             {
@@ -271,14 +271,18 @@ public static class CloneService
         }
     }
 
-    private static async Task CopyDataWithBulkCopyAsync(
+    private static async Task<bool> CopyDataWithBulkCopyAsync(
         DbDataReader reader,
         MySqlConnection destination,
         string tableName,
         Action<string> log,
         CancellationToken cancellationToken)
     {
-        await PrepareConnectionForBulkCopyAsync(destination, log, cancellationToken);
+        var canUseBulkCopy = await PrepareConnectionForBulkCopyAsync(destination, log, cancellationToken);
+        if (!canUseBulkCopy)
+        {
+            return false;
+        }
 
         var bulkCopy = new MySqlBulkCopy(destination)
         {
@@ -286,6 +290,7 @@ public static class CloneService
         };
 
         bulkCopy.WriteToServer(reader);
+        return true;
     }
 
     private static async Task CopyDataWithBulkInsertAsync(DbDataReader reader, MySqlConnection destination, string tableName, CancellationToken cancellationToken)
@@ -359,19 +364,19 @@ public static class CloneService
         parameters.Clear();
     }
 
-    private static async Task PrepareConnectionForBulkCopyAsync(MySqlConnection destination, Action<string> log, CancellationToken cancellationToken)
+    private static async Task<bool> PrepareConnectionForBulkCopyAsync(MySqlConnection destination, Action<string> log, CancellationToken cancellationToken)
     {
         var connectionCharacterSet = await GetConnectionCharacterSetAsync(destination, cancellationToken);
         if (string.IsNullOrWhiteSpace(connectionCharacterSet))
         {
-            return;
+            return true;
         }
 
         var supportedCharset = await GetSupportedCharacterSetAsync(destination, connectionCharacterSet, cancellationToken);
         if (string.IsNullOrWhiteSpace(supportedCharset))
         {
-            log?.Invoke($"Destination server does not recognize character set '{connectionCharacterSet}'. Skipping SET NAMES before bulk copy.");
-            return;
+            log?.Invoke($"Destination server does not recognize character set '{connectionCharacterSet}'. Skipping bulk copy and using bulk insert.");
+            return false;
         }
 
         if (!string.Equals(supportedCharset, connectionCharacterSet, StringComparison.OrdinalIgnoreCase))
@@ -384,6 +389,8 @@ public static class CloneService
         {
             await setNamesCmd.ExecuteNonQueryAsync(cancellationToken);
         }
+
+        return true;
     }
 
     private static async Task CloneViewsAsync(MySqlConnection source, MySqlConnection destination, CancellationToken cancellationToken)

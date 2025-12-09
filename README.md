@@ -40,6 +40,33 @@ await CloneService.CloneDatabaseAsync(
 ```
 
 `copyMethod` приема:
+- `BulkCopy` (по подразбиране) – опитва се да прехвърли данните чрез `MySqlBulkCopy` и при неуспех (например непозната кодировка като `utf8mb4` на дестинационния сървър) автоматично пада към `BulkInsert`.
+- `BulkInsert` – директно изпълнява пакетни `INSERT` команди.
+
+### Пример: копиране на цялата база (структура, данни, изгледи, процедури, тригери)
+```csharp
+var sourceConnectionString = "Server=source-host;Port=3306;User Id=user;Password=password;Database=source_db";
+var destinationConnectionString = "Server=destination-host;Port=3306;User Id=user;Password=password;Database=destination_db";
+
+// Зареждаме всички таблици от източника и ги маркираме за копиране на данните им
+var tableNames = await CloneService.GetTablesAsync(sourceConnectionString);
+var tablesToClone = tableNames
+    .Select(name => new TableCloneOption(name, copyData: true))
+    .ToArray();
+
+await CloneService.CloneDatabaseAsync(
+    sourceConnectionString,
+    destinationConnectionString,
+    tablesToClone,
+    copyTriggers: true,
+    copyRoutines: true,
+    copyViews: true,
+    log: Console.WriteLine,
+    copyMethod: DataCopyMethod.BulkCopy,
+    createDestinationDatabaseIfMissing: true); // по желание автоматично създава дестинационната база
+```
+
+`copyMethod` приема:
 - `BulkCopy` (по подразбиране) – опитва се да прехвърли данните чрез `MySqlBulkCopy` и при неуспех автоматично пада към `BulkInsert`.
 - `BulkInsert` – директно изпълнява пакетни `INSERT` команди.
 
