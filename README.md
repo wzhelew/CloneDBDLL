@@ -21,35 +21,29 @@
 
 ## Употреба
 ```csharp
-var source = new DatabaseConnectionInfo
-{
-    Host = "source-host",
-    Port = 3306,
-    UserName = "user",
-    Password = "password",
-    Database = "source_db"
-};
+var sourceConnectionString = "Server=source-host;Port=3306;User Id=user;Password=password;Database=source_db";
+var destinationConnectionString = "Server=destination-host;Port=3306;User Id=user;Password=password;Database=destination_db";
 
-var destination = new DatabaseConnectionInfo
-{
-    Host = "destination-host",
-    Port = 3306,
-    UserName = "user",
-    Password = "password",
-    Database = "destination_db"
-};
-
-CloneService.CloneDatabase(
-    source,
-    destination,
-    new CloneOptions
+await CloneService.CloneDatabaseAsync(
+    sourceConnectionString,
+    destinationConnectionString,
+    new[]
     {
-        CopyViews = true,
-        CopyTriggers = true,
-        CopyRoutines = true
+        new TableCloneOption("table1", copyData: true),
+        new TableCloneOption("table2", copyData: false) // само структура
     },
-    log: message => Console.WriteLine(message));
+    copyTriggers: true,
+    copyRoutines: true,
+    copyViews: true,
+    log: message => Console.WriteLine(message),
+    copyMethod: DataCopyMethod.BulkInsert); // или BulkCopy (по подразбиране) с автоматичен fallback към BulkInsert
 ```
+
+`copyMethod` приема:
+- `BulkCopy` (по подразбиране) – опитва се да прехвърли данните чрез `MySqlBulkCopy` и при неуспех автоматично пада към `BulkInsert`.
+- `BulkInsert` – директно изпълнява пакетни `INSERT` команди.
+
+
 
 > Забележка: За да запазите максимална съвместимост с MySQL/MariaDB 5.x, библиотеката използва стандартни SQL команди (`SHOW CREATE TABLE/VIEW/TRIGGER/FUNCTION/PROCEDURE`) без диалектни разширения.
 > Допълнително: връзките се създават с `Allow User Variables=true`, за да се избегнат грешки като `MySqlException: Parameter '@aaaa' must be defined`; не е нужно ръчно да добавяте тази настройка в connection string.
