@@ -1,530 +1,406 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Data.Common;
 using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Text;
+using System.Text.RegularExpressions;
 using MySqlConnector;
 
-public sealed class TableCloneOption
+public class DatabaseConnectionInfo
 {
-    public string Name { get; }
-    public bool CopyData { get; }
-
-    public TableCloneOption(string name, bool copyData)
+    public DatabaseConnectionInfo()
     {
-        Name = name ?? throw new ArgumentNullException(nameof(name));
-        CopyData = copyData;
+        Host = string.Empty;
+        Port = 3306;
+        UserName = string.Empty;
+        Password = string.Empty;
+        Database = string.Empty;
+    }
+
+    public string Host { get; set; }
+    public int Port { get; set; }
+    public string UserName { get; set; }
+    public string Password { get; set; }
+    public string Database { get; set; }
+
+    public string BuildConnectionString()
+    {
+        var builder = new MySqlConnectionStringBuilder
+        {
+            Server = Host,
+            Port = (uint)(Port > 0 ? Port : 3306),
+            UserID = UserName,
+            Password = Password,
+            Database = Database,
+            AllowUserVariables = true
+        };
+
+        return builder.ConnectionString;
     }
 }
 
-public enum DataCopyMethod
+public class TableCloneOption
 {
-    BulkCopy,
-    BulkInsert
+    public TableCloneOption(string name, bool copyData, bool isBaseTable)
+    {
+        Name = name;
+        CopyData = copyData;
+        IsBaseTable = isBaseTable;
+    }
+
+    public string Name { get; set; }
+    public bool CopyData { get; set; }
+    public bool IsBaseTable { get; set; }
+}
+
+public class CloneOptions
+{
+    public CloneOptions()
+    {
+        CopyTriggers = true;
+        CopyRoutines = true;
+        CopyViews = true;
+    }
+
+    public bool CopyTriggers { get; set; }
+    public bool CopyRoutines { get; set; }
+    public bool CopyViews { get; set; }
 }
 
 public static class CloneService
 {
-    public static async Task<IReadOnlyList<string>> GetTablesAsync(string connectionString, CancellationToken cancellationToken = default)
+    public static void CloneDatabase(
+        DatabaseConnectionInfo source,
+        DatabaseConnectionInfo destination,
+        CloneOptions options = null,
+        Action<string> log = null)
     {
-        using (var connection = new MySqlConnection(EnsureLocalInfileEnabled(connectionString)))
-        {
-            await connection.OpenAsync(cancellationToken);
+        if (source == null) throw new ArgumentNullException(nameof(source));
+        if (destination == null) throw new ArgumentNullException(nameof(destination));
 
-            var tables = new List<string>();
-            const string sql = "SELECT TABLE_NAME FROM information_schema.tables WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE' ORDER BY TABLE_NAME";
-            using (var command = new MySqlCommand(sql, connection))
-            using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        options = options ?? new CloneOptions();
+
+        var sourceConnectionString = source.BuildConnectionString();
+        var destinationConnectionString = destination.BuildConnectionString();
+
+        using (var sourceConnection = new MySqlConnection(sourceConnectionString))
+        using (var destinationConnection = new MySqlConnection(destinationConnectionString))
+        {
+            sourceConnection.Open();
+            destinationConnection.Open();
+
+            var tables = GetTables(sourceConnection);
+            var originalForeignKeyState = GetForeignKeyChecks(destinationConnection);
+            SetForeignKeyChecks(destinationConnection, 0);
+
+            try
             {
-                while (await reader.ReadAsync(cancellationToken))
+                foreach (var table in tables)
                 {
-                    tables.Add(GetStringValue(reader, 0));
+                    if (!table.IsBaseTable)
+                    {
+                        // Views are handled separately.
+                        continue;
+                    }
+
+                    if (log != null)
+                    {
+                        log(string.Format("Cloning structure for table '{0}'...", table.Name));
+                    }
+                    CloneTable(sourceConnection, destinationConnection, table.Name);
+
+                    if (table.CopyData)
+                    {
+                        if (log != null)
+                        {
+                            log(string.Format("Copying data for '{0}'...", table.Name));
+                        }
+                        CopyData(sourceConnection, destinationConnection, table.Name);
+                    }
+                }
+
+                if (options != null && options.CopyViews)
+                {
+                    if (log != null)
+                    {
+                        log("Cloning views...");
+                    }
+                    CloneViews(sourceConnection, destinationConnection);
+                }
+
+                if (options != null && options.CopyTriggers)
+                {
+                    if (log != null)
+                    {
+                        log("Cloning triggers...");
+                    }
+                    CloneTriggers(sourceConnection, destinationConnection);
+                }
+
+                if (options != null && options.CopyRoutines)
+                {
+                    if (log != null)
+                    {
+                        log("Cloning stored routines (functions/procedures)...");
+                    }
+                    CloneRoutines(sourceConnection, destinationConnection);
+                }
+
+                if (log != null)
+                {
+                    log("Cloning completed successfully.");
                 }
             }
-
-            return tables;
-        }
-    }
-
-    public static async Task CloneDatabaseAsync(
-        string sourceConnectionString,
-        string destinationConnectionString,
-        IReadOnlyCollection<TableCloneOption> tables,
-        bool copyTriggers,
-        bool copyRoutines,
-        bool copyViews,
-        Action<string> log = null,
-        DataCopyMethod copyMethod = DataCopyMethod.BulkCopy,
-        bool createDestinationDatabaseIfMissing = false,
-        CancellationToken cancellationToken = default)
-    {
-        var sourceBuilder = new MySqlConnectionStringBuilder(EnsureLocalInfileEnabled(sourceConnectionString));
-        var destinationBuilder = new MySqlConnectionStringBuilder(EnsureLocalInfileEnabled(destinationConnectionString));
-
-        using (var source = new MySqlConnection(sourceBuilder.ToString()))
-        {
-            await source.OpenAsync(cancellationToken);
-
-            if (createDestinationDatabaseIfMissing)
+            finally
             {
-                var sourceDatabase = string.IsNullOrWhiteSpace(sourceBuilder.Database)
-                    ? await GetCurrentDatabaseAsync(source, cancellationToken)
-                    : sourceBuilder.Database;
-
-                await EnsureDestinationDatabaseExistsAsync(source, sourceDatabase, destinationBuilder, cancellationToken);
-            }
-
-            using (var destination = new MySqlConnection(destinationBuilder.ToString()))
-            {
-                await destination.OpenAsync(cancellationToken);
-
-                var originalForeignKeyState = await GetForeignKeyChecksAsync(destination, cancellationToken);
-                await SetForeignKeyChecksAsync(destination, 0, cancellationToken);
-
-                try
-                {
-                    foreach (var table in tables)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-
-                        if (!await IsBaseTableAsync(source, table.Name, cancellationToken))
-                        {
-                            log?.Invoke($"Skipping '{table.Name}' because it is a view; views are cloned separately.");
-                            continue;
-                        }
-
-                        log?.Invoke($"Cloning structure for table '{table.Name}'...");
-                        await CloneTableAsync(source, destination, table.Name, cancellationToken);
-
-                        if (table.CopyData)
-                        {
-                            log?.Invoke($"Copying data for '{table.Name}'...");
-                            await CopyDataAsync(source, destination, table.Name, copyMethod, log, cancellationToken);
-                        }
-                    }
-
-                    if (copyViews)
-                    {
-                        log?.Invoke("Cloning views...");
-                        await CloneViewsAsync(source, destination, cancellationToken);
-                    }
-
-                    if (copyTriggers)
-                    {
-                        log?.Invoke("Cloning triggers...");
-                        await CloneTriggersAsync(source, destination, cancellationToken);
-                    }
-
-                    if (copyRoutines)
-                    {
-                        log?.Invoke("Cloning stored routines (functions/procedures)...");
-                        await CloneRoutinesAsync(source, destination, cancellationToken);
-                    }
-
-                    log?.Invoke("Cloning completed successfully.");
-                }
-                finally
-                {
-                    await SetForeignKeyChecksAsync(destination, originalForeignKeyState, cancellationToken);
-                }
+                SetForeignKeyChecks(destinationConnection, originalForeignKeyState);
             }
         }
     }
 
-    private static async Task CloneTableAsync(MySqlConnection source, MySqlConnection destination, string tableName, CancellationToken cancellationToken)
+    private static List<TableCloneOption> GetTables(MySqlConnection connection)
     {
-        using (var createCmd = new MySqlCommand($"SHOW CREATE TABLE `{tableName}`;", source))
-        using (var reader = await createCmd.ExecuteReaderAsync(cancellationToken))
+        var tables = new List<TableCloneOption>();
+        const string sql = "SELECT TABLE_NAME, TABLE_TYPE FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY TABLE_NAME";
+
+        using (var command = new MySqlCommand(sql, connection))
+        using (var reader = command.ExecuteReader())
         {
-            if (!await reader.ReadAsync(cancellationToken))
+            while (reader.Read())
+            {
+                var name = reader.GetString(0);
+                var tableType = reader.GetString(1);
+                var isBaseTable = string.Equals(tableType, "BASE TABLE", StringComparison.OrdinalIgnoreCase);
+                tables.Add(new TableCloneOption(name, isBaseTable, isBaseTable));
+            }
+        }
+
+        return tables;
+    }
+
+    private static void CloneTable(MySqlConnection source, MySqlConnection destination, string tableName)
+    {
+        using (var createCmd = new MySqlCommand(string.Format("SHOW CREATE TABLE `{0}`;", tableName), source))
+        using (var reader = createCmd.ExecuteReader())
+        {
+            if (!reader.Read())
             {
                 return;
             }
 
-            var createStatement = GetStringValue(reader, 1);
+            var createStatement = reader.GetString(1);
             reader.Close();
 
-            using (var dropTableCmd = new MySqlCommand($"DROP TABLE IF EXISTS `{tableName}`;", destination))
+            using (var dropCmd = new MySqlCommand(string.Format("DROP TABLE IF EXISTS `{0}`;", tableName), destination))
             {
-                await dropTableCmd.ExecuteNonQueryAsync(cancellationToken);
+                dropCmd.ExecuteNonQuery();
             }
 
             using (var createDestCmd = new MySqlCommand(createStatement, destination))
             {
-                await createDestCmd.ExecuteNonQueryAsync(cancellationToken);
+                createDestCmd.ExecuteNonQuery();
             }
         }
     }
 
-    private static async Task EnsureDestinationDatabaseExistsAsync(
-        MySqlConnection source,
-        string sourceDatabase,
-        MySqlConnectionStringBuilder destinationBuilder,
-        CancellationToken cancellationToken)
+    private static void CopyData(MySqlConnection source, MySqlConnection destination, string tableName)
     {
-        if (string.IsNullOrWhiteSpace(destinationBuilder.Database) || string.IsNullOrWhiteSpace(sourceDatabase))
-        {
-            return;
-        }
-
-        var (characterSet, collation) = await GetDatabaseCharsetAndCollationAsync(source, sourceDatabase, cancellationToken);
-
-        var adminBuilder = new MySqlConnectionStringBuilder(destinationBuilder.ToString())
-        {
-            Database = string.Empty
-        };
-
-        using (var adminConnection = new MySqlConnection(adminBuilder.ToString()))
-        {
-            await adminConnection.OpenAsync(cancellationToken);
-
-            var createSql = $"CREATE DATABASE IF NOT EXISTS {WrapName(destinationBuilder.Database)}";
-            if (!string.IsNullOrEmpty(characterSet))
-            {
-                createSql += $" CHARACTER SET {characterSet}";
-            }
-
-            if (!string.IsNullOrEmpty(collation))
-            {
-                createSql += $" COLLATE {collation}";
-            }
-
-            createSql += ";";
-
-            using (var createCmd = new MySqlCommand(createSql, adminConnection))
-            {
-                await createCmd.ExecuteNonQueryAsync(cancellationToken);
-            }
-        }
-    }
-
-    private static async Task CopyDataAsync(
-        MySqlConnection source,
-        MySqlConnection destination,
-        string tableName,
-        DataCopyMethod method,
-        Action<string> log,
-        CancellationToken cancellationToken)
-    {
-        switch (method)
-        {
-            case DataCopyMethod.BulkInsert:
-                await CopyWithBulkInsertAsync(source, destination, tableName, cancellationToken);
-                break;
-            case DataCopyMethod.BulkCopy:
-            default:
-                var bulkCopied = await TryCopyWithBulkCopyAsync(source, destination, tableName, log, cancellationToken);
-                if (!bulkCopied)
-                {
-                    await CopyWithBulkInsertAsync(source, destination, tableName, cancellationToken);
-                }
-                break;
-        }
-    }
-
-    private static async Task<bool> TryCopyWithBulkCopyAsync(
-        MySqlConnection source,
-        MySqlConnection destination,
-        string tableName,
-        Action<string> log,
-        CancellationToken cancellationToken)
-    {
-        using (var selectCmd = new MySqlCommand($"SELECT * FROM `{tableName}`;", source))
-        using (var reader = await selectCmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken))
-        {
-            if (!reader.HasRows)
-            {
-                return true;
-            }
-
-            try
-            {
-                var copied = await CopyDataWithBulkCopyAsync(reader, destination, tableName, log, cancellationToken);
-                return copied;
-            }
-            catch (Exception ex) when (ex is MySqlException || ex is InvalidOperationException)
-            {
-                log?.Invoke($"Bulk copy failed for '{tableName}', falling back to bulk insert: {ex.Message}");
-                return false;
-            }
-        }
-    }
-
-    private static async Task CopyWithBulkInsertAsync(
-        MySqlConnection source,
-        MySqlConnection destination,
-        string tableName,
-        CancellationToken cancellationToken)
-    {
-        using (var selectCmd = new MySqlCommand($"SELECT * FROM `{tableName}`;", source))
-        using (var reader = await selectCmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken))
+        using (var selectCmd = new MySqlCommand(string.Format("SELECT * FROM `{0}`;", tableName), source))
+        using (var reader = selectCmd.ExecuteReader())
         {
             if (!reader.HasRows)
             {
                 return;
             }
 
-            await CopyDataWithBulkInsertAsync(reader, destination, tableName, cancellationToken);
-        }
-    }
+            var columnNames = Enumerable.Range(0, reader.FieldCount)
+                .Select(reader.GetName)
+                .ToArray();
 
-    private static async Task<bool> CopyDataWithBulkCopyAsync(
-        DbDataReader reader,
-        MySqlConnection destination,
-        string tableName,
-        Action<string> log,
-        CancellationToken cancellationToken)
-    {
-        var canUseBulkCopy = await PrepareConnectionForBulkCopyAsync(destination, log, cancellationToken);
-        if (!canUseBulkCopy)
-        {
-            return false;
-        }
+            var parameterNames = columnNames.Select((_, i) => string.Format("@p{0}", i)).ToArray();
+            var insertSql = string.Format(
+                "INSERT INTO `{0}` ({1}) VALUES ({2});",
+                tableName,
+                string.Join(", ", columnNames.Select(WrapName)),
+                string.Join(", ", parameterNames));
 
-        var bulkCopy = new MySqlBulkCopy(destination)
-        {
-            DestinationTableName = WrapName(tableName)
-        };
-
-        bulkCopy.WriteToServer(reader);
-        return true;
-    }
-
-    private static async Task CopyDataWithBulkInsertAsync(DbDataReader reader, MySqlConnection destination, string tableName, CancellationToken cancellationToken)
-    {
-        const int batchSize = 500;
-
-        var schema = reader.GetColumnSchema();
-        if (schema.Count == 0)
-        {
-            return;
-        }
-
-        var columnNames = schema.Select(col => WrapName(col.ColumnName)).ToArray();
-        var insertPrefix = $"INSERT INTO {WrapName(tableName)} ({string.Join(", ", columnNames)}) VALUES ";
-
-        var valueRows = new List<string>(batchSize);
-        var parameters = new List<MySqlParameter>(batchSize * columnNames.Length);
-
-        try
-        {
-            while (await reader.ReadAsync(cancellationToken))
+            while (reader.Read())
             {
-                var placeholders = new string[columnNames.Length];
-                for (var i = 0; i < columnNames.Length; i++)
+                using (var insertCmd = new MySqlCommand(insertSql, destination))
                 {
-                    var paramName = $"@p{parameters.Count}";
-                    placeholders[i] = paramName;
+                    for (var i = 0; i < columnNames.Length; i++)
+                    {
+                        insertCmd.Parameters.AddWithValue(parameterNames[i], reader.GetValue(i));
+                    }
 
-                    var value = await reader.IsDBNullAsync(i, cancellationToken)
-                        ? DBNull.Value
-                        : reader.GetValue(i);
-
-                    parameters.Add(new MySqlParameter(paramName, value));
-                }
-
-                valueRows.Add($"({string.Join(", ", placeholders)})");
-
-                if (valueRows.Count >= batchSize)
-                {
-                    await FlushBatchAsync(destination, insertPrefix, valueRows, parameters, cancellationToken);
+                    insertCmd.ExecuteNonQuery();
                 }
             }
         }
-        finally
-        {
-            await FlushBatchAsync(destination, insertPrefix, valueRows, parameters, cancellationToken);
-        }
     }
 
-    private static async Task FlushBatchAsync(
-        MySqlConnection destination,
-        string insertPrefix,
-        List<string> valueRows,
-        List<MySqlParameter> parameters,
-        CancellationToken cancellationToken)
-    {
-        if (valueRows.Count == 0)
-        {
-            return;
-        }
-
-        var sql = insertPrefix + string.Join(", ", valueRows) + ";";
-
-        using (var insertCmd = new MySqlCommand(sql, destination))
-        {
-            insertCmd.Parameters.AddRange(parameters.ToArray());
-            await insertCmd.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        valueRows.Clear();
-        parameters.Clear();
-    }
-
-    private static async Task<bool> PrepareConnectionForBulkCopyAsync(MySqlConnection destination, Action<string> log, CancellationToken cancellationToken)
-    {
-        var connectionCharacterSet = await GetConnectionCharacterSetAsync(destination, cancellationToken);
-        if (string.IsNullOrWhiteSpace(connectionCharacterSet))
-        {
-            return true;
-        }
-
-        var supportedCharset = await GetSupportedCharacterSetAsync(destination, connectionCharacterSet, cancellationToken);
-        if (string.IsNullOrWhiteSpace(supportedCharset))
-        {
-            log?.Invoke($"Destination server does not recognize character set '{connectionCharacterSet}'. Skipping bulk copy and using bulk insert.");
-            return false;
-        }
-
-        if (!string.Equals(supportedCharset, connectionCharacterSet, StringComparison.OrdinalIgnoreCase))
-        {
-            log?.Invoke($"Character set '{connectionCharacterSet}' not supported by destination; using '{supportedCharset}' for bulk copy.");
-        }
-
-        var setNamesSql = $"SET NAMES {supportedCharset};";
-        using (var setNamesCmd = new MySqlCommand(setNamesSql, destination))
-        {
-            await setNamesCmd.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        return true;
-    }
-
-    private static async Task CloneViewsAsync(MySqlConnection source, MySqlConnection destination, CancellationToken cancellationToken)
+    private static void CloneViews(MySqlConnection source, MySqlConnection destination)
     {
         const string listViewsSql = "SHOW FULL TABLES WHERE Table_type = 'VIEW';";
+        var definitions = new List<Tuple<string, string>>();
+
         using (var listCmd = new MySqlCommand(listViewsSql, source))
-        using (var reader = await listCmd.ExecuteReaderAsync(cancellationToken))
+        using (var reader = listCmd.ExecuteReader())
         {
-            var views = new List<string>();
-            while (await reader.ReadAsync(cancellationToken))
+            while (reader.Read())
             {
-                views.Add(GetStringValue(reader, 0));
+                definitions.Add(new Tuple<string, string>(reader.GetString(0), string.Empty));
             }
-            reader.Close();
+        }
 
-            var definitions = new List<(string Name, string CreateSql)>();
-            foreach (var viewName in views)
+        for (var i = 0; i < definitions.Count; i++)
+        {
+            var viewName = definitions[i].Item1;
+            using (var createCmd = new MySqlCommand(string.Format("SHOW CREATE VIEW `{0}`;", viewName), source))
+            using (var createReader = createCmd.ExecuteReader())
             {
-                using (var createCmd = new MySqlCommand($"SHOW CREATE VIEW `{viewName}`;", source))
-                using (var createReader = await createCmd.ExecuteReaderAsync(cancellationToken))
+                if (createReader.Read())
                 {
-                    if (!await createReader.ReadAsync(cancellationToken))
-                    {
-                        continue;
-                    }
-
-                    var createStatement = GetStringValue(createReader, 1);
-                    createReader.Close();
-
-                    definitions.Add((viewName, createStatement));
+                    definitions[i] = new Tuple<string, string>(viewName, createReader.GetString(1));
                 }
             }
+        }
 
-            foreach (var (name, _) in definitions)
+        foreach (var definition in definitions)
+        {
+            using (var dropCmd = new MySqlCommand(string.Format("DROP VIEW IF EXISTS `{0}`;", definition.Item1), destination))
             {
-                using (var dropViewCmd = new MySqlCommand($"DROP VIEW IF EXISTS `{name}`;", destination))
+                dropCmd.ExecuteNonQuery();
+            }
+        }
+
+        var pending = new List<Tuple<string, string>>(definitions);
+        while (pending.Count > 0)
+        {
+            var createdThisPass = false;
+            Exception lastError = null;
+
+            foreach (var view in new List<Tuple<string, string>>(pending))
+            {
+                try
                 {
-                    await dropViewCmd.ExecuteNonQueryAsync(cancellationToken);
+                    var sanitized = StripDefiner(view.Item2);
+                    using (var createDestCmd = new MySqlCommand(sanitized, destination))
+                    {
+                        createDestCmd.ExecuteNonQuery();
+                    }
+
+                    pending.Remove(view);
+                    createdThisPass = true;
+                }
+                catch (MySqlException ex)
+                {
+                    lastError = ex;
                 }
             }
 
-            var pending = new List<(string Name, string CreateSql)>(definitions);
-            while (pending.Count > 0)
+            if (!createdThisPass)
             {
-                var createdThisPass = false;
-                Exception lastError = null;
-
-                foreach (var view in pending.ToList())
-                {
-                    try
-                    {
-                        using (var createDestCmd = new MySqlCommand(view.CreateSql, destination))
-                        {
-                            await createDestCmd.ExecuteNonQueryAsync(cancellationToken);
-                        }
-
-                        pending.Remove(view);
-                        createdThisPass = true;
-                    }
-                    catch (MySqlException ex) when (ex.Number == 1146 || ex.Number == 1356)
-                    {
-                        lastError = ex;
-                    }
-                }
-
-                if (!createdThisPass)
-                {
-                    throw lastError ?? new InvalidOperationException("Unable to create views due to unresolved dependencies.");
-                }
+                throw lastError ?? new InvalidOperationException("Unable to create views due to unresolved dependencies.");
             }
         }
     }
 
-    private static async Task CloneTriggersAsync(MySqlConnection source, MySqlConnection destination, CancellationToken cancellationToken)
+    private static void CloneTriggers(MySqlConnection source, MySqlConnection destination)
     {
         const string listSql = "SELECT TRIGGER_NAME FROM information_schema.triggers WHERE TRIGGER_SCHEMA = DATABASE();";
+        var triggers = new List<string>();
+
         using (var listCmd = new MySqlCommand(listSql, source))
-        using (var reader = await listCmd.ExecuteReaderAsync(cancellationToken))
+        using (var reader = listCmd.ExecuteReader())
         {
-            var triggers = new List<string>();
-            while (await reader.ReadAsync(cancellationToken))
+            while (reader.Read())
             {
-                triggers.Add(GetStringValue(reader, 0));
+                triggers.Add(reader.GetString(0));
             }
-            reader.Close();
+        }
 
-            var sourceSchema = await GetCurrentDatabaseAsync(source, cancellationToken);
-            var destinationSchema = await GetCurrentDatabaseAsync(destination, cancellationToken);
+        var sourceSchema = GetCurrentDatabase(source);
+        var destinationSchema = GetCurrentDatabase(destination);
 
-            foreach (var trigger in triggers)
+        foreach (var trigger in triggers)
+        {
+            using (var createCmd = new MySqlCommand(string.Format("SHOW CREATE TRIGGER `{0}`;", trigger), source))
+            using (var createReader = createCmd.ExecuteReader())
             {
-                var triggerDetailsQuery = $@"SELECT ACTION_TIMING, EVENT_MANIPULATION, EVENT_OBJECT_TABLE, ACTION_STATEMENT
-FROM information_schema.triggers
-WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = '{MySqlHelper.EscapeString(trigger)}'
-LIMIT 1;";
-
-                using (var createCmd = new MySqlCommand(triggerDetailsQuery, source))
-                using (var createReader = await createCmd.ExecuteReaderAsync(cancellationToken))
+                if (!createReader.Read())
                 {
-                    if (!await createReader.ReadAsync(cancellationToken))
-                    {
-                        continue;
-                    }
+                    continue;
+                }
 
-                    var actionTiming = GetStringValue(createReader, 0);
-                    var eventManipulation = GetStringValue(createReader, 1);
-                    var eventTable = GetStringValue(createReader, 2);
-                    var body = GetStringValue(createReader, 3).Trim().TrimEnd(';');
-                    createReader.Close();
+                var createStatement = createReader.GetString(2);
 
-                    if (!string.IsNullOrEmpty(sourceSchema) && !string.IsNullOrEmpty(destinationSchema) && !sourceSchema.Equals(destinationSchema, StringComparison.OrdinalIgnoreCase))
-                    {
-                        eventTable = ReplaceIgnoreCase(eventTable, sourceSchema, destinationSchema);
-                    }
+                if (!string.IsNullOrEmpty(sourceSchema) && !string.IsNullOrEmpty(destinationSchema) && !sourceSchema.Equals(destinationSchema, StringComparison.OrdinalIgnoreCase))
+                {
+                    createStatement = createStatement.Replace(string.Format("`{0}`.", sourceSchema), string.Format("`{0}`.", destinationSchema));
+                }
 
-                    var createStatement = $"CREATE TRIGGER {WrapName(trigger)} {actionTiming} {eventManipulation} ON {WrapName(eventTable)} FOR EACH ROW {body};";
-                    createStatement = NormalizeTriggerCreateStatement(createStatement);
+                using (var dropCmd = new MySqlCommand(string.Format("DROP TRIGGER IF EXISTS `{0}`;", trigger), destination))
+                {
+                    dropCmd.ExecuteNonQuery();
+                }
 
-                    try
-                    {
-                        await ExecuteTextNonQueryAsync(destination, $"DROP TRIGGER `{trigger}`;", cancellationToken);
-                    }
-                    catch (MySqlException ex) when (ex.Number == 1360)
-                    {
-                        // Trigger is missing on the destination; safe to ignore before recreation.
-                    }
-
-                    await ExecuteTextNonQueryAsync(destination, createStatement, cancellationToken);
+                var sanitized = StripDefiner(createStatement);
+                using (var createDestCmd = new MySqlCommand(sanitized, destination))
+                {
+                    createDestCmd.ExecuteNonQuery();
                 }
             }
         }
     }
 
-    private static async Task<string> GetCurrentDatabaseAsync(MySqlConnection connection, CancellationToken cancellationToken)
+    private static void CloneRoutines(MySqlConnection source, MySqlConnection destination)
+    {
+        const string listSql = "SELECT ROUTINE_NAME, ROUTINE_TYPE FROM information_schema.routines WHERE ROUTINE_SCHEMA = DATABASE();";
+        var routines = new List<Tuple<string, string>>();
+
+        using (var listCmd = new MySqlCommand(listSql, source))
+        using (var reader = listCmd.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                routines.Add(new Tuple<string, string>(reader.GetString(0), reader.GetString(1)));
+            }
+        }
+
+        foreach (var routine in routines)
+        {
+            var showCommand = string.Equals(routine.Item2, "FUNCTION", StringComparison.OrdinalIgnoreCase)
+                ? string.Format("SHOW CREATE FUNCTION `{0}`;", routine.Item1)
+                : string.Format("SHOW CREATE PROCEDURE `{0}`;", routine.Item1);
+
+            using (var createCmd = new MySqlCommand(showCommand, source))
+            using (var createReader = createCmd.ExecuteReader())
+            {
+                if (!createReader.Read())
+                {
+                    continue;
+                }
+
+                var createStatement = createReader.GetString(2);
+                var dropSql = string.Equals(routine.Item2, "FUNCTION", StringComparison.OrdinalIgnoreCase)
+                    ? string.Format("DROP FUNCTION IF EXISTS `{0}`;", routine.Item1)
+                    : string.Format("DROP PROCEDURE IF EXISTS `{0}`;", routine.Item1);
+
+                using (var dropCmd = new MySqlCommand(dropSql, destination))
+                {
+                    dropCmd.ExecuteNonQuery();
+                }
+
+                var sanitized = StripDefiner(createStatement);
+                using (var createDestCmd = new MySqlCommand(sanitized, destination))
+                {
+                    createDestCmd.ExecuteNonQuery();
+                }
+            }
+        }
+    }
+
+    private static string GetCurrentDatabase(MySqlConnection connection)
     {
         if (!string.IsNullOrEmpty(connection.Database))
         {
@@ -533,279 +409,50 @@ LIMIT 1;";
 
         using (var cmd = new MySqlCommand("SELECT DATABASE();", connection))
         {
-            var result = await cmd.ExecuteScalarAsync(cancellationToken);
+            var result = cmd.ExecuteScalar();
             return Convert.ToString(result) ?? string.Empty;
         }
     }
 
-    private static async Task<(string CharacterSet, string Collation)> GetDatabaseCharsetAndCollationAsync(
-        MySqlConnection connection,
-        string databaseName,
-        CancellationToken cancellationToken)
-    {
-        const string sql = @"SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME
-FROM information_schema.schemata
-WHERE SCHEMA_NAME = @schemaName
-LIMIT 1;";
-
-        using (var cmd = new MySqlCommand(sql, connection))
-        {
-            cmd.Parameters.AddWithValue("@schemaName", databaseName);
-
-            using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
-            {
-                if (await reader.ReadAsync(cancellationToken))
-                {
-                    var characterSet = reader.IsDBNull(0) ? null : GetStringValue(reader, 0);
-                    var collation = reader.IsDBNull(1) ? null : GetStringValue(reader, 1);
-                    return (characterSet, collation);
-                }
-            }
-        }
-
-        return (null, null);
-    }
-
-    private static async Task CloneRoutinesAsync(MySqlConnection source, MySqlConnection destination, CancellationToken cancellationToken)
-    {
-        const string listSql = "SELECT ROUTINE_NAME, ROUTINE_TYPE FROM information_schema.routines WHERE ROUTINE_SCHEMA = DATABASE();";
-        using (var listCmd = new MySqlCommand(listSql, source))
-        using (var reader = await listCmd.ExecuteReaderAsync(cancellationToken))
-        {
-            var routines = new List<(string Name, string Type)>();
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                routines.Add((GetStringValue(reader, 0), GetStringValue(reader, 1)));
-            }
-            reader.Close();
-
-            foreach (var routine in routines)
-            {
-                var showCommand = routine.Type.Equals("FUNCTION", StringComparison.OrdinalIgnoreCase)
-                    ? $"SHOW CREATE FUNCTION `{routine.Name}`;"
-                    : $"SHOW CREATE PROCEDURE `{routine.Name}`;";
-
-                using (var createCmd = new MySqlCommand(showCommand, source))
-                using (var createReader = await createCmd.ExecuteReaderAsync(cancellationToken))
-                {
-                    if (!await createReader.ReadAsync(cancellationToken))
-                    {
-                        continue;
-                    }
-
-                    var createStatement = GetStringValue(createReader, 2);
-                    createReader.Close();
-
-                    var dropSql = routine.Type.Equals("FUNCTION", StringComparison.OrdinalIgnoreCase)
-                        ? $"DROP FUNCTION IF EXISTS `{routine.Name}`;"
-                        : $"DROP PROCEDURE IF EXISTS `{routine.Name}`;";
-
-                    using (var dropRoutineCmd = new MySqlCommand(dropSql, destination))
-                    {
-                        await dropRoutineCmd.ExecuteNonQueryAsync(cancellationToken);
-                    }
-
-                    using (var createDestCmd = new MySqlCommand(createStatement, destination))
-                    {
-                        await createDestCmd.ExecuteNonQueryAsync(cancellationToken);
-                    }
-                }
-            }
-        }
-    }
-
-    private static async Task<uint> GetForeignKeyChecksAsync(MySqlConnection connection, CancellationToken cancellationToken)
+    private static uint GetForeignKeyChecks(MySqlConnection connection)
     {
         using (var cmd = new MySqlCommand("SELECT @@FOREIGN_KEY_CHECKS;", connection))
         {
-            var result = await cmd.ExecuteScalarAsync(cancellationToken);
+            var result = cmd.ExecuteScalar();
             return Convert.ToUInt32(result);
         }
     }
 
-    private static string NormalizeTriggerCreateStatement(string createStatement)
+    private static void SetForeignKeyChecks(MySqlConnection connection, uint value)
     {
-        var cleaned = StripVersionedComments(createStatement);
-        cleaned = StripDefinerClause(cleaned);
-        cleaned = cleaned.Trim();
-
-        // Some CREATE TRIGGER statements from older servers can lose the leading CREATE
-        // keyword after definer/version comment stripping, causing syntax errors that begin
-        // at "TRIGGER ...". Ensure the statement is explicitly prefixed with CREATE so the
-        // destination server accepts the definition.
-        if (!cleaned.StartsWith("CREATE", StringComparison.OrdinalIgnoreCase))
+        using (var cmd = new MySqlCommand(string.Format("SET FOREIGN_KEY_CHECKS={0};", value), connection))
         {
-            cleaned = $"CREATE {cleaned}";
-        }
-
-        return cleaned;
-    }
-
-    private static string StripVersionedComments(string sql)
-    {
-        var builder = new StringBuilder();
-        for (var i = 0; i < sql.Length; i++)
-        {
-            if (i + 2 < sql.Length && sql[i] == '/' && sql[i + 1] == '*' && sql[i + 2] == '!')
-            {
-                var endComment = sql.IndexOf("*/", i + 3, StringComparison.Ordinal);
-                if (endComment < 0)
-                {
-                    break;
-                }
-
-                i = endComment + 1;
-                continue;
-            }
-
-            builder.Append(sql[i]);
-        }
-
-        return builder.ToString();
-    }
-
-    private static string StripDefinerClause(string sql)
-    {
-        const string definerKeyword = " DEFINER=";
-        var definerIndex = sql.IndexOf(definerKeyword, StringComparison.OrdinalIgnoreCase);
-        if (definerIndex < 0)
-        {
-            return sql;
-        }
-
-        var triggerIndex = sql.IndexOf(" TRIGGER", definerIndex, StringComparison.OrdinalIgnoreCase);
-        if (triggerIndex < 0)
-        {
-            return sql;
-        }
-
-        return sql.Remove(definerIndex, triggerIndex - definerIndex);
-    }
-
-    private static async Task<bool> IsBaseTableAsync(MySqlConnection connection, string tableName, CancellationToken cancellationToken)
-    {
-        const string sql = "SELECT TABLE_TYPE FROM information_schema.tables WHERE table_schema = DATABASE() AND TABLE_NAME = @tableName LIMIT 1;";
-        using (var cmd = new MySqlCommand(sql, connection))
-        {
-            cmd.Parameters.AddWithValue("@tableName", tableName);
-
-            var result = await cmd.ExecuteScalarAsync(cancellationToken);
-            return string.Equals(result as string, "BASE TABLE", StringComparison.OrdinalIgnoreCase);
+            cmd.ExecuteNonQuery();
         }
     }
 
-    private static async Task SetForeignKeyChecksAsync(MySqlConnection connection, uint value, CancellationToken cancellationToken)
+    private static string WrapName(string name)
     {
-        using (var cmd = new MySqlCommand($"SET FOREIGN_KEY_CHECKS={value};", connection))
-        {
-            await cmd.ExecuteNonQueryAsync(cancellationToken);
-        }
+        return string.Format("`{0}`", name);
     }
 
-    private static string GetStringValue(DbDataReader reader, int ordinal)
+    private static string StripDefiner(string createStatement)
     {
-        var value = reader.GetValue(ordinal);
-        if (value is string stringValue)
+        if (string.IsNullOrEmpty(createStatement))
         {
-            return stringValue;
+            return createStatement;
         }
 
-        if (value is byte[] bytes)
-        {
-            return Encoding.UTF8.GetString(bytes);
-        }
+        var withoutVersionedDefiner = Regex.Replace(
+            createStatement,
+            @"\/\*![0-9]{5}\s+DEFINER\s*=\s*[^*]*\*\/",
+            string.Empty,
+            RegexOptions.IgnoreCase | RegexOptions.Multiline);
 
-        return Convert.ToString(value) ?? string.Empty;
-    }
-
-    private static string ReplaceIgnoreCase(string input, string search, string replacement)
-    {
-        if (string.IsNullOrEmpty(input) || string.IsNullOrEmpty(search))
-        {
-            return input;
-        }
-
-        var comparison = StringComparison.OrdinalIgnoreCase;
-        var startIndex = 0;
-        var result = new StringBuilder();
-
-        while (true)
-        {
-            var matchIndex = input.IndexOf(search, startIndex, comparison);
-            if (matchIndex < 0)
-            {
-                result.Append(input, startIndex, input.Length - startIndex);
-                break;
-            }
-
-            result.Append(input, startIndex, matchIndex - startIndex);
-            result.Append(replacement);
-            startIndex = matchIndex + search.Length;
-        }
-
-        return result.ToString();
-    }
-
-    private static string WrapName(string name) => $"`{name}`";
-
-    private static string EnsureLocalInfileEnabled(string connectionString)
-    {
-        var builder = new MySqlConnectionStringBuilder(connectionString)
-        {
-            AllowLoadLocalInfile = true,
-            AllowUserVariables = true,
-            IgnorePrepare = true
-        };
-
-        return builder.ToString();
-    }
-
-    private static async Task<string> GetConnectionCharacterSetAsync(MySqlConnection connection, CancellationToken cancellationToken)
-    {
-        using (var cmd = new MySqlCommand("SELECT @@character_set_connection;", connection))
-        {
-            var result = await cmd.ExecuteScalarAsync(cancellationToken);
-            return result as string;
-        }
-    }
-
-    private static async Task<string> GetSupportedCharacterSetAsync(MySqlConnection connection, string requestedCharacterSet, CancellationToken cancellationToken)
-    {
-        const string sql = "SELECT COUNT(*) FROM information_schema.CHARACTER_SETS WHERE CHARACTER_SET_NAME = @charset LIMIT 1;";
-
-        using (var cmd = new MySqlCommand(sql, connection))
-        {
-
-            async Task<bool> CharacterSetExistsAsync(string charset)
-            {
-                cmd.Parameters.Clear();
-                cmd.Parameters.AddWithValue("@charset", charset);
-                var result = await cmd.ExecuteScalarAsync(cancellationToken);
-                return Convert.ToInt32(result) > 0;
-            }
-
-            if (await CharacterSetExistsAsync(requestedCharacterSet))
-            {
-                return requestedCharacterSet;
-            }
-
-            if (requestedCharacterSet.Equals("utf8mb4", StringComparison.OrdinalIgnoreCase) && await CharacterSetExistsAsync("utf8"))
-            {
-                return "utf8";
-            }
-
-            return null;
-        }
-    }
-
-    private static async Task ExecuteTextNonQueryAsync(MySqlConnection connection, string sql, CancellationToken cancellationToken)
-    {
-        using (var cmd = new MySqlCommand(sql, connection)
-        {
-            CommandType = CommandType.Text
-        })
-        {
-            await cmd.ExecuteNonQueryAsync(cancellationToken);
-        }
+        return Regex.Replace(
+            withoutVersionedDefiner,
+            "\\s*DEFINER\\s*=\\s*[^\\s]+",
+            string.Empty,
+            RegexOptions.IgnoreCase | RegexOptions.Multiline);
     }
 }
